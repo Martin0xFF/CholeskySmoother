@@ -5,18 +5,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def generate_velocity():
+def generate_velocity(t):
     """Construct simulated trajectory derivative"""
-    t = np.linspace(0, 10, 100)
     dx = 0.05 * (np.cos(t) - t * np.sin(t))
     dy = 0.05 * (np.sin(t) + t * np.cos(t))
     dz = 0.05 * np.ones(t.shape)
     return np.hstack([dx[:, None], dy[:, None], dz[:, None]])
 
 
-def generate_trajectory():
+def generate_trajectory(t):
     """Construct simulated trajectory that appears as a cork screw."""
-    t = np.linspace(0, 10, 100)
 
     x = 0.05 * t * np.cos(t)
     y = 0.05 * t * np.sin(t)
@@ -24,7 +22,7 @@ def generate_trajectory():
     r = np.hstack([x[:, None], y[:, None], z[:, None]])
 
     # Axis angle
-    dr = generate_velocity()
+    dr = generate_velocity(t)
     axis_angle = (
         2 * np.pi * (0.1) * t[:, None] * (dr / np.linalg.norm(dr, axis=1)[:, None])
     )
@@ -135,6 +133,9 @@ def _construct_model_martix(op):
     for i in range(op.K):
         A_inv[offset(i + 1) : offset(i + 2), offset(i) : offset(i + 1)] = -A_o
 
+    # Required for state variance estimate.
+    A = np.linalg.inv(A_inv)
+
     C_o = np.zeros((op.M, op.N))
     C_o[:, : op.M] = np.identity(op.M)
     C = np.zeros((op.M * (op.K + 1), op.N * (op.K + 1)))
@@ -144,7 +145,7 @@ def _construct_model_martix(op):
         C[op.M * i : op.M * (i + 1), op.N * i : op.N * (i + 1)] = C_o
 
     # Return H matrix.
-    return np.vstack([A_inv, C])
+    return (np.vstack([A_inv, C]), A, C)
 
 
 def _construct_noise_matrix(op):
@@ -155,13 +156,24 @@ def _construct_noise_matrix(op):
     K = op.K
 
     W = np.identity((N + M) * (K + 1))
-    W[: N * (K + 1), : N * (K + 1)] = np.diag(0.1 * np.ones((N * (K + 1),)))
-
     for i in range(K + 1):
-        if i == 0:
-            # initial, treat noise like observation noise since we pick initial
-            # state from observation.
-            continue
+        offset = lambda i: N * (K + 1) + M * i
+        # Assign Measured AngleAxis Noise.
+        ori_offset = offset(i)
+        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
+            op.mosig * np.ones((3,))
+        )
+
+        # Assign Measured Position Noise.
+        pos_offset = offset(i) + 3
+        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
+            op.mpsig * np.ones((3,))
+        )
+
+        # if i == 0:
+        #     # initial, treat noise like observation noise since we pick initial
+        #     # state from observation.
+        #     continue
 
         offset = lambda i: N * i
 
@@ -195,23 +207,13 @@ def _construct_noise_matrix(op):
             op.asig * np.ones((3,))
         )
 
-        offset = lambda i: N * (K + 1) + M * i
-        # Assign AngleAxis Noise.
-        ori_offset = offset(i)
-        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            op.mosig * np.ones((3,))
-        )
-
-        # Assign Position Noise.
-        pos_offset = offset(i) + 3
-        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            op.mpsig * np.ones((3,))
-        )
-
-    return W
+    # Required for Covariance calculation.
+    Q = W[: N * (K + 1), : N * (K + 1)]
+    R = W[N * (K + 1) : (N + M) * (K + 1), N * (K + 1) : (N + M) * (K + 1)]
+    return W, Q, R
 
 
-def CholeskySmoother(observations, op):
+def CholeskySmoother(observations, op, t):
     """Given 6DoF Observations structure as convex problem over trajectory and
     solve with cholesky decomposition.
 
@@ -247,10 +249,14 @@ def CholeskySmoother(observations, op):
         Z[offset(i) : offset(i + 1), 0] = observations[i, :]
 
     Z[:6, 0] = observations[0, :]
-    Z[9:12, 0] = generate_velocity()[0, :]
+    Z[9:12, 0] = generate_velocity(t)[0, :]
 
-    H = _construct_model_martix(op)
-    W = _construct_noise_matrix(op)
+    H, A, C = _construct_model_martix(op)
+    W, Q, R = _construct_noise_matrix(op)
+
+    # Covariance Calculation
+    P_check = A @ Q @ A.T
+    P_hat = np.linalg.inv(np.linalg.inv(P_check) + C.T @ np.linalg.inv(R) @ C)
 
     # The Key Terms are H,W,Z
     # H - Model Matrix made of Ai and Ci Matricies
@@ -259,14 +265,25 @@ def CholeskySmoother(observations, op):
 
     W_inv = np.linalg.inv(W)
     X_est = np.linalg.solve(H.T @ W_inv @ H, H.T @ W_inv @ Z)
-    return X_est.reshape((K + 1, N), order="C")
+    return X_est.reshape((K + 1, N), order="C"), P_hat
+
+
+def trace(index, t, y, res, cov):
+    sig = np.sqrt(cov.diagonal()[index::15])
+    plt.plot(t, y[:, index])
+    plt.plot(t, res[:, index])
+    plt.plot(t, res[:, index] + 3 * sig, color="green")
+    plt.plot(t, res[:, index] - 3 * sig, color="green")
+    plt.show()
 
 
 if __name__ == "__main__":
-    v = generate_trajectory()
-    dv = generate_velocity()
+    t = np.linspace(0, 10, 100)
+    v = generate_trajectory(t)
+    dv = generate_velocity(t)
 
-    observations = v + get_random(0.01, 0.1, seed=69)
+    observations = v + get_random(0.01, 0.08, seed=42)
+    scale = 1e-3
     options = CholeskySmootherOptions(
         N=15,
         M=6,
@@ -274,14 +291,14 @@ if __name__ == "__main__":
         dt=0.1,
         osig=1.0,
         ovsig=1.0,
-        psig=0.001,
-        vsig=0.05,
-        asig=0.5,
+        psig=scale * 0.1,
+        vsig=scale * 0.5,
+        asig=scale * 1.0,
+        mpsig=scale * 10,
         mosig=1.0,
-        mpsig=0.3,
     )
 
-    res = CholeskySmoother(observations, options)
+    res, cov = CholeskySmoother(observations, options, t)
 
     print(
         f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,3:])/options.K} No Smooth Dist mm per frame"
@@ -299,6 +316,10 @@ if __name__ == "__main__":
         f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,:3])/options.K} With Smooth Ori rad per frame"
     )
 
+    trace(3, t, v, res, cov)
+    trace(4, t, v, res, cov)
+    trace(5, t, v, res, cov)
+
     # # Plot positions
     plot(
         [v[:, 3:], observations[:, 3:]],
@@ -306,7 +327,7 @@ if __name__ == "__main__":
     )
 
     # # Plot velocities
-    # plot([dv[:, :], res[:, 9:]], zlim=[0.04, 0.06])
+    plot([dv[:, :], res[:, 9:]], zlim=[0.04, 0.06])
 
     # # Plot Orientations
     # plot(
