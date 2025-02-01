@@ -260,25 +260,19 @@ if __name__ == "__main__":
 
     res = CholeskySmoother(observations, options)
     print(
-        f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,
-        3:])/options.K} No Smooth Dist mm per frame"
+        f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,3:])/options.K} No Smooth Dist mm per frame"
     )
     print(
-        f"L2 Norm: {1e3*np.linalg.norm(res[:, 3:6] - v[:,
-        3:])/options.K} With Smooth Dist mm per frame"
+        f"L2 Norm: {1e3*np.linalg.norm(res[:, 3:6] - v[:,3:])/options.K} With Smooth Dist mm per frame"
     )
     print(
-        f"L2 Norm: {1e3*np.linalg.norm(res[:, 9:12] - dv[:,
-        :])/options.K} With Smooth Vel Error mm/s per frame"
-    )
-
-    print(
-        f"L2 Norm: {np.linalg.norm(observations[:,:3] - v[:,
-    :3])/options.K} No Smooth Ori rad per frame"
+        f"L2 Norm: {1e3*np.linalg.norm(res[:, 9:12] - dv[:,:])/options.K} With Smooth Vel Error mm/s per frame"
     )
     print(
-        f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,
-        :3])/options.K} With Smooth Ori rad per frame"
+        f"L2 Norm: {np.linalg.norm(observations[:,:3] - v[:,:3])/options.K} No Smooth Ori rad per frame"
+    )
+    print(
+        f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,:3])/options.K} With Smooth Ori rad per frame"
     )
 
     # Plot positions
