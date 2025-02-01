@@ -117,6 +117,9 @@ class CholeskySmootherOptions:
     vsig: float = 1.0
     asig: float = 1.0
 
+    mosig: float = 1.0
+    mpsig: float = 1.0
+
 
 def _construct_model_martix(op):
     """Construct the Model Matrix H which expresses the process and observation
@@ -154,17 +157,20 @@ def _construct_noise_matrix(op):
     W = np.identity((N + M) * (K + 1))
     W[: N * (K + 1), : N * (K + 1)] = np.diag(0.1 * np.ones((N * (K + 1),)))
 
-    offset = lambda i: N * i
     for i in range(K + 1):
         if i == 0:
             # initial, treat noise like observation noise since we pick initial
             # state from observation.
             continue
+
+        offset = lambda i: N * i
+
         # Assign AngleAxis Noise.
         ori_offset = offset(i)
         W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
             op.osig * np.ones((3,))
         )
+
         # Assign Position Noise.
         pos_offset = offset(i) + 3
         W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
@@ -176,15 +182,30 @@ def _construct_noise_matrix(op):
         W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
             op.ovsig * np.ones((3,))
         )
+
         # Assign Velocity Noise.
         vel_offset = offset(i) + 9
         W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
             op.vsig * np.ones((3,))
         )
+
         # Assign Acceleration Noise.
         acc_offset = offset(i) + 12
         W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
             op.asig * np.ones((3,))
+        )
+
+        offset = lambda i: N * (K + 1) + M * i
+        # Assign AngleAxis Noise.
+        ori_offset = offset(i)
+        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
+            op.mosig * np.ones((3,))
+        )
+
+        # Assign Position Noise.
+        pos_offset = offset(i) + 3
+        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
+            op.mpsig * np.ones((3,))
         )
 
     return W
@@ -256,9 +277,12 @@ if __name__ == "__main__":
         psig=0.001,
         vsig=0.05,
         asig=0.5,
+        mosig=1.0,
+        mpsig=0.3,
     )
 
     res = CholeskySmoother(observations, options)
+
     print(
         f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,3:])/options.K} No Smooth Dist mm per frame"
     )
@@ -275,14 +299,14 @@ if __name__ == "__main__":
         f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,:3])/options.K} With Smooth Ori rad per frame"
     )
 
-    # Plot positions
+    # # Plot positions
     plot(
         [v[:, 3:], observations[:, 3:]],
         [v[:, 3:], res[:, 3:]],
     )
 
-    # Plot velocities
-    plot([dv[:, :], res[:, 9:]], zlim=[0.04, 0.06])
+    # # Plot velocities
+    # plot([dv[:, :], res[:, 9:]], zlim=[0.04, 0.06])
 
     # # Plot Orientations
     # plot(
