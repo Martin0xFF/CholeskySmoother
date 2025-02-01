@@ -170,10 +170,39 @@ def _construct_noise_matrix(op):
             op.mpsig * np.ones((3,))
         )
 
-        # if i == 0:
-        #     # initial, treat noise like observation noise since we pick initial
-        #     # state from observation.
-        #     continue
+        if i == 0:
+            # initial, treat noise like observation noise since we pick initial
+            # state from observation.
+            # Assign AngleAxis Noise.
+            ori_offset = offset(i)
+            W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
+                op.mosig * np.ones((3,))
+            )
+
+            # Assign Position Noise.
+            pos_offset = offset(i) + 3
+            W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
+                op.mpsig * np.ones((3,))
+            )
+
+            # Assign Angular Velocity Noise.
+            vel_offset = offset(i) + 6
+            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
+                op.mosig * np.ones((3,))
+            )
+
+            # Assign Velocity Noise.
+            vel_offset = offset(i) + 9
+            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
+                op.mpsig * np.ones((3,))
+            )
+
+            # Assign Acceleration Noise.
+            acc_offset = offset(i) + 12
+            W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
+                op.mpsig * np.ones((3,))
+            )
+            continue
 
         offset = lambda i: N * i
 
@@ -291,10 +320,10 @@ if __name__ == "__main__":
         dt=0.1,
         osig=1.0,
         ovsig=1.0,
-        psig=scale * 0.1,
-        vsig=scale * 0.5,
-        asig=scale * 1.0,
-        mpsig=scale * 10,
+        psig=scale * 1,
+        vsig=scale * 10,
+        asig=scale * 80,
+        mpsig=scale * 80,
         mosig=1.0,
     )
 
