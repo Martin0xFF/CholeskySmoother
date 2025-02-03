@@ -4,6 +4,8 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 
+from montecarlo import MCMC
+
 
 def generate_velocity(t):
     """Construct simulated trajectory derivative"""
@@ -29,10 +31,10 @@ def generate_trajectory(t):
     return np.hstack([axis_angle, r])
 
 
-def get_random(ovar, pvar, seed=42):
+def get_random(ovar, pvar, seed=42, dim=100):
     rng = np.random.default_rng(seed)
     return np.hstack(
-        [rng.normal(0, ovar, size=(100, 3)), rng.normal(0, pvar, size=(100, 3))]
+        [rng.normal(0, ovar, size=(dim, 3)), rng.normal(0, pvar, size=(dim, 3))]
     )
 
 
@@ -108,6 +110,7 @@ class CholeskySmootherOptions:
 
     dt: float = 0.1
 
+    # Note this is standard deviation and not variance.
     osig: float = 1.0
     psig: float = 1.0
 
@@ -115,11 +118,18 @@ class CholeskySmootherOptions:
     vsig: float = 1.0
     asig: float = 1.0
 
+    iosig: float = 1.0
+    ipsig: float = 1.0
+
+    iovsig: float = 1.0
+    ivsig: float = 1.0
+    iasig: float = 1.0
+
     mosig: float = 1.0
     mpsig: float = 1.0
 
 
-def _construct_model_martix(op):
+def construct_model_martix(op, include_cov=False):
     """Construct the Model Matrix H which expresses the process and observation
     model across K+1 measurements(i.e. entire trajectory).
     """
@@ -134,7 +144,11 @@ def _construct_model_martix(op):
         A_inv[offset(i + 1) : offset(i + 2), offset(i) : offset(i + 1)] = -A_o
 
     # Required for state variance estimate.
-    A = np.linalg.inv(A_inv)
+
+    if include_cov:
+        A = np.linalg.inv(A_inv)
+    else:
+        A = None
 
     C_o = np.zeros((op.M, op.N))
     C_o[:, : op.M] = np.identity(op.M)
@@ -148,7 +162,7 @@ def _construct_model_martix(op):
     return (np.vstack([A_inv, C]), A, C)
 
 
-def _construct_noise_matrix(op):
+def construct_noise_matrix(op, include_cov=False):
     # Noise Matrix. First N*(K+1) is related to motion, next M*(K+1) is related
     # to observation.
     N = op.N
@@ -161,13 +175,13 @@ def _construct_noise_matrix(op):
         # Assign Measured AngleAxis Noise.
         ori_offset = offset(i)
         W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            op.mosig * np.ones((3,))
+            np.square(op.mosig) * np.ones((3,))
         )
 
         # Assign Measured Position Noise.
         pos_offset = offset(i) + 3
         W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            op.mpsig * np.ones((3,))
+            np.square(op.mpsig) * np.ones((3,))
         )
 
         if i == 0:
@@ -176,31 +190,31 @@ def _construct_noise_matrix(op):
             # Assign AngleAxis Noise.
             ori_offset = offset(i)
             W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-                op.mosig * np.ones((3,))
+                np.square(op.iosig) * np.ones((3,))
             )
 
             # Assign Position Noise.
             pos_offset = offset(i) + 3
             W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-                op.mpsig * np.ones((3,))
+                np.square(op.ipsig) * np.ones((3,))
             )
 
             # Assign Angular Velocity Noise.
             vel_offset = offset(i) + 6
             W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                op.mosig * np.ones((3,))
+                np.square(op.iovsig) * np.ones((3,))
             )
 
             # Assign Velocity Noise.
             vel_offset = offset(i) + 9
             W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                op.mpsig * np.ones((3,))
+                np.square(op.ivsig) * np.ones((3,))
             )
 
             # Assign Acceleration Noise.
             acc_offset = offset(i) + 12
             W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-                op.mpsig * np.ones((3,))
+                np.square(op.iasig) * np.ones((3,))
             )
             continue
 
@@ -209,31 +223,31 @@ def _construct_noise_matrix(op):
         # Assign AngleAxis Noise.
         ori_offset = offset(i)
         W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            op.osig * np.ones((3,))
+            np.square(op.osig) * np.ones((3,))
         )
 
         # Assign Position Noise.
         pos_offset = offset(i) + 3
         W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            op.psig * np.ones((3,))
+            np.square(op.psig) * np.ones((3,))
         )
 
         # Assign Angular Velocity Noise.
         vel_offset = offset(i) + 6
         W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            op.ovsig * np.ones((3,))
+            np.square(op.ovsig) * np.ones((3,))
         )
 
         # Assign Velocity Noise.
         vel_offset = offset(i) + 9
         W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            op.vsig * np.ones((3,))
+            np.square(op.vsig) * np.ones((3,))
         )
 
         # Assign Acceleration Noise.
         acc_offset = offset(i) + 12
         W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-            op.asig * np.ones((3,))
+            np.square(op.asig) * np.ones((3,))
         )
 
     # Required for Covariance calculation.
@@ -242,7 +256,7 @@ def _construct_noise_matrix(op):
     return W, Q, R
 
 
-def CholeskySmoother(observations, op, t):
+def CholeskySmoother(observations, op, t, include_cov=False):
     """Given 6DoF Observations structure as convex problem over trajectory and
     solve with cholesky decomposition.
 
@@ -271,83 +285,168 @@ def CholeskySmoother(observations, op, t):
     # Construct Initial state, Inputs and Observations vector.
     Z = np.zeros(((N + M) * (K + 1), 1))
 
-    # Here we assume the initial state and inputs are zero, only populate
+    # Here we assume the inputs are zero, only populate
     # observations
     offset = lambda i: (K + 1) * N + i * M
     for i in range(K + 1):
         Z[offset(i) : offset(i + 1), 0] = observations[i, :]
 
+    # Use initial observation for initial position.
     Z[:6, 0] = observations[0, :]
-    Z[9:12, 0] = generate_velocity(t)[0, :]
+    # No information about derivatives so just assume zero.
 
-    H, A, C = _construct_model_martix(op)
-    W, Q, R = _construct_noise_matrix(op)
+    H, A, C = construct_model_martix(op, include_cov)
+    W, Q, R = construct_noise_matrix(op, include_cov)
 
     # Covariance Calculation
-    P_check = A @ Q @ A.T
-    P_hat = np.linalg.inv(np.linalg.inv(P_check) + C.T @ np.linalg.inv(R) @ C)
+    if include_cov:
+        P_check = A @ Q @ A.T
+        P_hat = np.linalg.inv(np.linalg.inv(P_check) + C.T @ np.linalg.inv(R) @ C)
+    else:
+        P_hat = None
 
     # The Key Terms are H,W,Z
     # H - Model Matrix made of Ai and Ci Matricies
     # W - Noise Matrix made of Qi and Ri
     # Z - Xo, Vi, Yi
 
-    W_inv = np.linalg.inv(W)
+    W_inv = np.diag(1.0 / W.diagonal())
+    # W_inv = np.linalg.inv(W)
     X_est = np.linalg.solve(H.T @ W_inv @ H, H.T @ W_inv @ Z)
     return X_est.reshape((K + 1, N), order="C"), P_hat
 
 
-def trace(index, t, y, res, cov):
+def trace(index, t, y, res, cov, error=False):
+    # TODO: Compute the Eigen values of the covariance matrix then plot those
+    # instead of just diagonal.
     sig = np.sqrt(cov.diagonal()[index::15])
-    plt.plot(t, y[:, index])
-    plt.plot(t, res[:, index])
-    plt.plot(t, res[:, index] + 3 * sig, color="green")
-    plt.plot(t, res[:, index] - 3 * sig, color="green")
+    err = y[:, index] - res[:, index]
+    if error:
+        plt.plot(t, err)
+        plt.plot(t, err + 3 * sig, color="green", linestyle="dashed")
+        plt.plot(t, err - 3 * sig, color="green", linestyle="dashed")
+    else:
+        plt.plot(t, y[:, index])
+        plt.plot(t, res[:, index])
+        plt.plot(t, res[:, index] + 3 * sig, color="green", linestyle="dashed")
+        plt.plot(t, res[:, index] - 3 * sig, color="green", linestyle="dashed")
     plt.show()
 
 
-if __name__ == "__main__":
-    t = np.linspace(0, 10, 100)
+def ConfigureAndRun(state, observations, include_cov=False):
+    return CholeskySmoother(
+        observations,
+        CholeskySmootherOptions(
+            N=15,
+            M=6,
+            K=24,
+            dt=0.1,
+            # Orientation
+            # Initial
+            iosig=1.0,
+            iovsig=1.0,
+            # Model
+            osig=1.0,
+            ovsig=1.0,
+            # Observation
+            mosig=1.0,
+            # Position
+            # initial
+            ipsig=160,
+            ivsig=160,
+            iasig=160,
+            # Models
+            psig=state[0],
+            vsig=state[1],
+            asig=state[2],
+            # Observation
+            mpsig=state[3],
+        ),
+        t,
+        include_cov,
+    )
+
+
+def SearchForOptimal(t, v, dv, observations):
+    def likelihood_fn(x, observations):
+        if x[x <= 0.0].any() or x[x >= 5.0].any():
+            return -np.inf
+        # Compute Position Norm as likelihood.
+        # TODO: Determine why scaling these terms by some large factor helps.
+        res, _cov = ConfigureAndRun(x, observations)
+        pos_term = -1e6 * np.sum(
+            np.square(np.linalg.norm(res[:, 3:6] - v[:, 3:], axis=1))
+        )
+        vel_term = -1e3 * np.sum(
+            np.square(np.linalg.norm(res[:, 9:12] - dv[:, :], axis=1))
+        )
+        return pos_term + vel_term
+
+    samples = MCMC(
+        likelihood_fn,
+        [observations],
+        np.array([0.001, 0.005, 0.008, 0.08]),
+        1000,
+        200,
+        12,
+    )
+
+    means = np.mean(samples, axis=0)
+    for i in range(samples.shape[1]):
+        print(f"Final Outlier Less Mean along index {i}: {means[i]}")
+    # Include covariance for run with optimal values.
+    return ConfigureAndRun(means, observations, include_cov=True)
+
+
+def ex():
+    K = 25
+    t = np.linspace(0, 10, K)
     v = generate_trajectory(t)
     dv = generate_velocity(t)
+    observations = v + get_random(0.01, 0.04, seed=42, dim=K)
+    ConfigureAndRun([1, 1, 1], observations)
 
-    observations = v + get_random(0.01, 0.08, seed=42)
-    scale = 1e-3
-    options = CholeskySmootherOptions(
-        N=15,
-        M=6,
-        K=99,
-        dt=0.1,
-        osig=1.0,
-        ovsig=1.0,
-        psig=scale * 1,
-        vsig=scale * 10,
-        asig=scale * 80,
-        mpsig=scale * 80,
-        mosig=1.0,
+
+if __name__ == "__main__":
+    K = 25
+    t = np.linspace(0, 10, K)
+    v = generate_trajectory(t)
+    dv = generate_velocity(t)
+    observations = v + get_random(0.01, 0.08, seed=42, dim=K)
+
+    # Time profiling code.
+    # import timeit
+
+    # timer = timeit.Timer("ex()", setup="from __main__ import ex")
+    # execution_times = timer.repeat(
+    #     repeat=3, number=10
+    # )  # Run 3 times, each 1000 iterations
+    # print(f"Execution times: {execution_times}")
+    # print(f"Average execution time: {sum(execution_times)/(3*1000)} seconds")
+    # exit(0)
+
+    res, cov = SearchForOptimal(t, v, dv, observations)
+    # res, cov = ConfigureAndRun([0.001, 0.04, 0.04], observations, include_cov=True)
+
+    print(
+        f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,3:])/K} No Smooth Dist mm per frame"
+    )
+    print(
+        f"L2 Norm: {1e3*np.linalg.norm(res[:, 3:6] - v[:,3:])/K} With Smooth Dist mm per frame"
+    )
+    print(
+        f"L2 Norm: {1e3*np.linalg.norm(res[:, 9:12] - dv[:,:])/K} With Smooth Vel Error mm/s per frame"
+    )
+    print(
+        f"L2 Norm: {np.linalg.norm(observations[:,:3] - v[:,:3])/K} No Smooth Ori rad per frame"
+    )
+    print(
+        f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,:3])/K} With Smooth Ori rad per frame"
     )
 
-    res, cov = CholeskySmoother(observations, options, t)
-
-    print(
-        f"L2 Norm: {1e3*np.linalg.norm(observations[:,3:] - v[:,3:])/options.K} No Smooth Dist mm per frame"
-    )
-    print(
-        f"L2 Norm: {1e3*np.linalg.norm(res[:, 3:6] - v[:,3:])/options.K} With Smooth Dist mm per frame"
-    )
-    print(
-        f"L2 Norm: {1e3*np.linalg.norm(res[:, 9:12] - dv[:,:])/options.K} With Smooth Vel Error mm/s per frame"
-    )
-    print(
-        f"L2 Norm: {np.linalg.norm(observations[:,:3] - v[:,:3])/options.K} No Smooth Ori rad per frame"
-    )
-    print(
-        f"L2 Norm: {np.linalg.norm(res[:, :3] - v[:,:3])/options.K} With Smooth Ori rad per frame"
-    )
-
-    trace(3, t, v, res, cov)
-    trace(4, t, v, res, cov)
-    trace(5, t, v, res, cov)
+    trace(3, t, v, res, cov, True)
+    trace(4, t, v, res, cov, True)
+    trace(5, t, v, res, cov, True)
 
     # # Plot positions
     plot(
