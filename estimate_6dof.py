@@ -99,15 +99,14 @@ def CholeskySmoother(observations, op, t, include_cov=False, sparse=False):
 
     if sparse:
         sH, sA, sC = md.construct_sparse_model_martix(op, include_cov)
-        sW, sQ, sR = md.construct_sparse_noise_matrix(op, include_cov)
+        # sW, sQ, sR = md.construct_sparse_noise_matrix(op, include_cov)
 
-        sW_inv = np.diag(1.0 / sW.diagonal())
-        X_est = sp.sparse.linalg.spsolve(sH.T @ sW_inv @ sH, sH.T @ sW_inv @ Z)
+        sW_inv = sp.sparse.csc_matrix(np.diag(1.0 / W.diagonal()))
+        sZ = sp.sparse.csc_matrix(Z)
+
+        X_est = sp.sparse.linalg.spsolve(sH.T @ sW_inv @ sH, sH.T @ sW_inv @ sZ)
 
         if include_cov:
-            sA = sp.sparse.csr_matrix(A)
-            sC = sp.sparse.csr_matrix(C)
-
             sQ = sp.sparse.csr_matrix(Q)
             sR = sp.sparse.csr_matrix(R)
 
