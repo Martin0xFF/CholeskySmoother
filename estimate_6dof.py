@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -55,6 +56,22 @@ class CholeskySmootherOptions:
     mpsig: float = 1.0
 
 
+def constructZ(N, M, K, observations):
+    # Construct Initial state, Inputs and Observations vector.
+    Z = np.zeros(((N + M) * (K + 1), 1))
+
+    # Here we assume the inputs are zero, only populate
+    # observations
+    offset = lambda i: (K + 1) * N + i * M
+    for i in range(K + 1):
+        Z[offset(i) : offset(i + 1), 0] = observations[i, :]
+
+    # Use initial observation for initial position.
+    Z[:6, 0] = observations[0, :]
+    # No information about derivatives so just assume zero.
+    return Z
+
+
 def CholeskySmoother(observations, op, t, include_cov=False, sparse=False):
     """Given 6DoF Observations structure as convex problem over trajectory and
     solve with cholesky decomposition.
@@ -81,43 +98,27 @@ def CholeskySmoother(observations, op, t, include_cov=False, sparse=False):
     # K - max step index in the trajectory
     K = op.K
 
-    # Construct Initial state, Inputs and Observations vector.
-    Z = np.zeros(((N + M) * (K + 1), 1))
-
-    # Here we assume the inputs are zero, only populate
-    # observations
-    offset = lambda i: (K + 1) * N + i * M
-    for i in range(K + 1):
-        Z[offset(i) : offset(i + 1), 0] = observations[i, :]
-
-    # Use initial observation for initial position.
-    Z[:6, 0] = observations[0, :]
-    # No information about derivatives so just assume zero.
-
-    H, A, C = md.construct_model_martix(op, include_cov)
-    W, Q, R = md.construct_noise_matrix(op, include_cov)
+    Z = constructZ(N, M, K, observations)
 
     if sparse:
         sH, sA, sC = md.construct_sparse_model_martix(op, include_cov)
-        # sW, sQ, sR = md.construct_sparse_noise_matrix(op, include_cov)
-
-        sW_inv = sp.sparse.csc_matrix(np.diag(1.0 / W.diagonal()))
-        sZ = sp.sparse.csc_matrix(Z)
-
-        X_est = sp.sparse.linalg.spsolve(sH.T @ sW_inv @ sH, sH.T @ sW_inv @ sZ)
+        W_vec, Q_vec, R_vec = md.construct_sparse_noise_matrix(op, include_cov)
+        W_inv = 1.0 / W_vec
+        prefix = sH.T * W_inv
+        sZ = sp.sparse.csc_array(Z)
+        X_est = sp.sparse.linalg.spsolve(prefix @ sH, prefix @ sZ)
 
         if include_cov:
-            sQ = sp.sparse.csr_matrix(Q)
-            sR = sp.sparse.csr_matrix(R)
-
-            sP_check = sA @ sQ @ sA.T
+            sP_check = (sA * Q_vec) @ sA.T
             sP_hat = sp.sparse.linalg.inv(
-                sp.sparse.linalg.inv(sP_check) + sC.T @ sp.sparse.linalg.inv(sR) @ sC
+                sp.sparse.linalg.inv(sP_check) + (sC.T * 1.0 / R_vec) @ sC
             )
         else:
             sP_hat = None
         return X_est.reshape((K + 1, N), order="C"), sP_hat
 
+    H, A, C = md.construct_model_martix(op, include_cov)
+    W, Q, R = md.construct_noise_matrix(op, include_cov)
     # Covariance Calculation
     if include_cov:
         P_check = A @ Q @ A.T
@@ -188,13 +189,13 @@ def ConfigureAndRun(state, observations, include_cov=False, sparse=False):
     )
 
 
-def SearchForOptimal(t, v, dv, observations):
+def SearchForOptimal(t, v, dv, observations, sparse):
     def likelihood_fn(x, observations):
-        if x[x <= 0.0].any() or x[x >= 10.0].any():
+        if x[x <= 0.0].any() or x[x >= 12.0].any():
             return -np.inf
         # Compute Position Norm as likelihood.
         # TODO: Determine why scaling these terms by some large factor helps.
-        res, _cov = ConfigureAndRun(x, observations)
+        res, _cov = ConfigureAndRun(x, observations, sparse=sparse)
         pos_term = -1e6 * np.sum(
             np.square(np.linalg.norm(res[:, 3:6] - v[:, 3:], axis=1))
         )
@@ -216,7 +217,7 @@ def SearchForOptimal(t, v, dv, observations):
     for i in range(samples.shape[1]):
         print(f"Final Outlier Less Mean along index {i}: {means[i]}")
     # Include covariance for run with optimal values.
-    return ConfigureAndRun(means, observations, include_cov=True)
+    return ConfigureAndRun(means, observations, include_cov=True, sparse=sparse)
 
 
 def ex(sparse=False):
@@ -272,15 +273,14 @@ if __name__ == "__main__":
             "ex(sparse=sparse)",
             setup=f"from __main__ import ex; sparse = {args.sparse}",
         )
-        execution_times = timer.repeat(
-            repeat=3, number=100
-        )  # Run 3 times, each 1000 iterations
+        reps = 10
+        execution_times = timer.repeat(repeat=reps, number=50)
         print(f"Execution times: {execution_times}")
-        print(f"Average execution time: {sum(execution_times)/(3*1000)} seconds")
+        print(f"Average execution time: {sum(execution_times)/(reps*1000)} seconds")
         exit(0)
 
     res, cov = (
-        SearchForOptimal(t, v, dv, observations)
+        SearchForOptimal(t, v, dv, observations, args.sparse)
         if args.search
         else ConfigureAndRun(
             [0.001, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04],

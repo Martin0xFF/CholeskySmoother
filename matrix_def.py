@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -35,7 +36,8 @@ def get_random(ovar, pvar, seed=42, dim=100):
     )
 
 
-def constructA(dt: float):
+@lru_cache
+def constructStepA(dt: float):
     aa = np.array(
         [
             [1, 0, 0, 0, 0, 0, dt, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -80,20 +82,32 @@ def constructA(dt: float):
     return np.vstack([aa, p, av, v, a])
 
 
+@lru_cache
+def constructStepC(M, N):
+    C_o = np.zeros((M, N))
+    C_o[:, :M] = np.identity(M)
+    return C_o
+
+
+@lru_cache
+def constructInvA(dt, N, K):
+    # Time delta between samples
+    A_o = constructStepA(dt)
+    A_inv = np.identity(N * (K + 1))
+
+    # Plate off diagonal.
+    offset = lambda i: N * i
+    for i in range(K):
+        A_inv[offset(i + 1) : offset(i + 2), offset(i) : offset(i + 1)] = -A_o
+    return A_inv
+
+
 def construct_model_martix(op, include_cov=False):
     """Construct the Model Matrix H which expresses the process and observation
     model across K+1 measurements(i.e. entire trajectory).
     """
 
-    # Time delta between samples
-    A_o = constructA(op.dt)
-    A_inv = np.identity(op.N * (op.K + 1))
-
-    # Populate off diagonal.
-    offset = lambda i: op.N * i
-    for i in range(op.K):
-        A_inv[offset(i + 1) : offset(i + 2), offset(i) : offset(i + 1)] = -A_o
-
+    A_inv = constructInvA(op.dt, op.N, op.K)
     # Required for state variance estimate.
 
     if include_cov:
@@ -101,14 +115,12 @@ def construct_model_martix(op, include_cov=False):
     else:
         A = None
 
-    C_o = np.zeros((op.M, op.N))
-    C_o[:, : op.M] = np.identity(op.M)
+    C_o = constructStepC(op.M, op.N)
     C = np.zeros((op.M * (op.K + 1), op.N * (op.K + 1)))
 
     # Populate diagonal
     for i in range(op.K + 1):
         C[op.M * i : op.M * (i + 1), op.N * i : op.N * (i + 1)] = C_o
-
     # Return H matrix.
     return (np.vstack([A_inv, C]), A, C)
 
@@ -121,85 +133,78 @@ def construct_noise_matrix(op, include_cov=False):
     K = op.K
 
     W = np.identity((N + M) * (K + 1))
+
+    # Observation values.
+    MO_mat = np.diag(np.square(op.mosig) * np.ones((3,)))
+    MP_mat = np.diag(np.square(op.mpsig) * np.ones((3,)))
+
+    # Initial Values.
+    IO_mat = np.diag(np.square(op.iosig) * np.ones((3,)))
+    IP_mat = np.diag(np.square(op.ipsig) * np.ones((3,)))
+    IOV_mat = np.diag(np.square(op.iovsig) * np.ones((3,)))
+    IV_mat = np.diag(np.square(op.ivsig) * np.ones((3,)))
+    IA_mat = np.diag(np.square(op.iasig) * np.ones((3,)))
+
+    # Process Values.
+    O_mat = np.diag(np.square(op.osig) * np.ones((3,)))
+    P_mat = np.diag(np.square(op.psig) * np.ones((3,)))
+    OV_mat = np.diag(np.square(op.ovsig) * np.ones((3,)))
+    V_mat = np.diag(np.square(op.vsig) * np.ones((3,)))
+    A_mat = np.diag(np.square(op.asig) * np.ones((3,)))
+
     for i in range(K + 1):
         offset = lambda i: N * (K + 1) + M * i
         # Assign Measured AngleAxis Noise.
         ori_offset = offset(i)
-        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            np.square(op.mosig) * np.ones((3,))
-        )
-
+        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = MO_mat
         # Assign Measured Position Noise.
         pos_offset = offset(i) + 3
-        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            np.square(op.mpsig) * np.ones((3,))
-        )
-
+        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = MP_mat
         if i == 0:
             # initial, treat noise like observation noise since we pick initial
             # state from observation.
             # Assign AngleAxis Noise.
             ori_offset = offset(i)
-            W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-                np.square(op.iosig) * np.ones((3,))
-            )
+            W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = IO_mat
 
             # Assign Position Noise.
             pos_offset = offset(i) + 3
-            W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-                np.square(op.ipsig) * np.ones((3,))
-            )
+            W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = IP_mat
 
             # Assign Angular Velocity Noise.
             vel_offset = offset(i) + 6
-            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                np.square(op.iovsig) * np.ones((3,))
-            )
+            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = IOV_mat
 
             # Assign Velocity Noise.
             vel_offset = offset(i) + 9
-            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                np.square(op.ivsig) * np.ones((3,))
-            )
+            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = IV_mat
 
             # Assign Acceleration Noise.
             acc_offset = offset(i) + 12
-            W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-                np.square(op.iasig) * np.ones((3,))
-            )
+            W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = IA_mat
             continue
 
         offset = lambda i: N * i
 
         # Assign AngleAxis Noise.
         ori_offset = offset(i)
-        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            np.square(op.osig) * np.ones((3,))
-        )
+        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = O_mat
 
         # Assign Position Noise.
         pos_offset = offset(i) + 3
-        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            np.square(op.psig) * np.ones((3,))
-        )
+        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = P_mat
 
         # Assign Angular Velocity Noise.
         vel_offset = offset(i) + 6
-        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            np.square(op.ovsig) * np.ones((3,))
-        )
+        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = OV_mat
 
         # Assign Velocity Noise.
         vel_offset = offset(i) + 9
-        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            np.square(op.vsig) * np.ones((3,))
-        )
+        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = V_mat
 
         # Assign Acceleration Noise.
         acc_offset = offset(i) + 12
-        W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-            np.square(op.asig) * np.ones((3,))
-        )
+        W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = A_mat
 
     # Required for Covariance calculation.
     Q = W[: N * (K + 1), : N * (K + 1)]
@@ -207,8 +212,9 @@ def construct_noise_matrix(op, include_cov=False):
     return W, Q, R
 
 
-def constructSparseA(dt: float):
-    aa = sp.sparse.csr_array(
+@lru_cache
+def constructSparseStepA(dt: float):
+    aa = sp.sparse.coo_array(
         (
             [1, 1, 1, dt, dt, dt],
             (
@@ -220,7 +226,7 @@ def constructSparseA(dt: float):
     )
 
     _a = 0.5 * dt * dt
-    p = sp.sparse.csr_array(
+    p = sp.sparse.coo_array(
         (
             [1, 1, 1, dt, dt, dt, _a, _a, _a],
             (
@@ -231,7 +237,7 @@ def constructSparseA(dt: float):
         shape=(3, 15),
     )
 
-    av = sp.sparse.csr_array(
+    av = sp.sparse.coo_array(
         (
             [1, 1, 1],
             (
@@ -242,7 +248,7 @@ def constructSparseA(dt: float):
         shape=(3, 15),
     )
 
-    v = sp.sparse.csr_array(
+    v = sp.sparse.coo_array(
         (
             [1, 1, 1, dt, dt, dt],
             (
@@ -253,7 +259,7 @@ def constructSparseA(dt: float):
         shape=(3, 15),
     )
 
-    a = sp.sparse.csr_array(
+    a = sp.sparse.coo_array(
         (
             [1, 1, 1],
             (
@@ -265,7 +271,12 @@ def constructSparseA(dt: float):
     )
 
     # Constant Process matrix
-    return sp.sparse.vstack([aa, p, av, v, a])
+    return sp.sparse.vstack([aa, p, av, v, a], format="coo")
+
+
+@lru_cache
+def constructSparseStepC(M, N):
+    return sp.sparse.eye_array(M, n=N, format="coo")
 
 
 def construct_sparse_model_martix(op, include_cov=False):
@@ -276,34 +287,30 @@ def construct_sparse_model_martix(op, include_cov=False):
     MK = op.M * (op.K + 1)
     NK = op.N * (op.K + 1)
 
-    # Time delta between samples
-    A_o = constructSparseA(op.dt)
-    A_inv = sp.sparse.eye_array(NK, format="lil")
+    # Local A depends on Time delta between samples; for now assumpt sampling is
+    # identical between each value.
+    A_o = constructSparseStepA(op.dt)
+    A_eye = sp.sparse.eye_array(op.N, format="coo")
 
-    # Populate off diagonal.
-    offset = lambda i: op.N * i
+    # Construct sparse block representation of matrix as list.
+    arrs = [[None for _ in range(op.K + 1)] for _ in range(op.K + 1)]
+    for i in range(op.K + 1):
+        arrs[i][i] = A_eye
     for i in range(op.K):
-        A_inv[offset(i + 1) : offset(i + 2), offset(i) : offset(i + 1)] = -A_o
-    A_inv = A_inv.tocsr()
+        arrs[i + 1][i] = -A_o
+    A_inv = sp.sparse.block_array(arrs, format="coo")
 
-    # Required for state variance estimate.
-
+    # Covariance calculation needs full A matrix. It's expensive to compute so
+    # avoid it if not used.
     if include_cov:
-        A = sp.sparse.linalg.inv(A_inv)
+        A = sp.sparse.linalg.inv(A_inv.tocsc())
     else:
         A = None
-
-    C_o = sp.sparse.eye_array(op.M, n=op.N, format="csr")
-
-    C = sp.sparse.lil_matrix((MK, NK))
-
-    # Populate diagonal
-    for i in range(op.K + 1):
-        C[op.M * i : op.M * (i + 1), op.N * i : op.N * (i + 1)] = C_o
-    C = C.tocsr()
-
+    C = sp.sparse.block_diag(
+        [constructStepC(op.M, op.N) for _ in range(op.K + 1)], format="csc"
+    )
     # Return H matrix.
-    return (sp.sparse.vstack([A_inv, C]), A, C)
+    return (sp.sparse.vstack([A_inv, C], format="csc"), A, C)
 
 
 def construct_sparse_noise_matrix(op, include_cov=False):
@@ -313,90 +320,45 @@ def construct_sparse_noise_matrix(op, include_cov=False):
     M = op.M
     K = op.K
 
-    W = np.identity((N + M) * (K + 1))
-    for i in range(K + 1):
-        offset = lambda i: N * (K + 1) + M * i
-        # Assign Measured AngleAxis Noise.
-        ori_offset = offset(i)
-        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            np.square(op.mosig) * np.ones((3,))
-        )
+    # Initial State
+    io_var = np.square(op.iosig)
+    ip_var = np.square(op.ipsig)
+    iov_var = np.square(op.iovsig)
+    iv_var = np.square(op.ivsig)
+    ia_var = np.square(op.iasig)
 
-        # Assign Measured Position Noise.
-        pos_offset = offset(i) + 3
-        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            np.square(op.mpsig) * np.ones((3,))
-        )
+    P_o = np.array(
+        3 * [io_var] + 3 * [ip_var] + 3 * [iov_var] + 3 * [iv_var] + 3 * [ia_var],
+    )
 
-        if i == 0:
-            # initial, treat noise like observation noise since we pick initial
-            # state from observation.
-            # Assign AngleAxis Noise.
-            ori_offset = offset(i)
-            W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-                np.square(op.iosig) * np.ones((3,))
-            )
+    # Process
+    o_var = np.square(op.osig)
+    p_var = np.square(op.psig)
+    ov_var = np.square(op.ovsig)
+    v_var = np.square(op.vsig)
+    a_var = np.square(op.asig)
 
-            # Assign Position Noise.
-            pos_offset = offset(i) + 3
-            W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-                np.square(op.ipsig) * np.ones((3,))
-            )
+    Q_k = np.array(
+        3 * [o_var] + 3 * [p_var] + 3 * [ov_var] + 3 * [v_var] + 3 * [a_var],
+    )
 
-            # Assign Angular Velocity Noise.
-            vel_offset = offset(i) + 6
-            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                np.square(op.iovsig) * np.ones((3,))
-            )
+    # Observations
+    mo_var = np.square(op.mosig)
+    mp_var = np.square(op.mpsig)
+    R_k = np.array(3 * [mo_var] + 3 * [mp_var])
 
-            # Assign Velocity Noise.
-            vel_offset = offset(i) + 9
-            W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-                np.square(op.ivsig) * np.ones((3,))
-            )
+    arrs = [None for _ in range(2 * (K + 1))]
+    arrs[0] = P_o
+    for i in range(1, K + 1):
+        arrs[i] = Q_k
+    for i in range(K + 1, 2 * (K + 1)):
+        arrs[i] = R_k
 
-            # Assign Acceleration Noise.
-            acc_offset = offset(i) + 12
-            W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-                np.square(op.iasig) * np.ones((3,))
-            )
-            continue
-
-        offset = lambda i: N * i
-
-        # Assign AngleAxis Noise.
-        ori_offset = offset(i)
-        W[ori_offset : ori_offset + 3, ori_offset : ori_offset + 3] = np.diag(
-            np.square(op.osig) * np.ones((3,))
-        )
-
-        # Assign Position Noise.
-        pos_offset = offset(i) + 3
-        W[pos_offset : pos_offset + 3, pos_offset : pos_offset + 3] = np.diag(
-            np.square(op.psig) * np.ones((3,))
-        )
-
-        # Assign Angular Velocity Noise.
-        vel_offset = offset(i) + 6
-        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            np.square(op.ovsig) * np.ones((3,))
-        )
-
-        # Assign Velocity Noise.
-        vel_offset = offset(i) + 9
-        W[vel_offset : vel_offset + 3, vel_offset : vel_offset + 3] = np.diag(
-            np.square(op.vsig) * np.ones((3,))
-        )
-
-        # Assign Acceleration Noise.
-        acc_offset = offset(i) + 12
-        W[acc_offset : acc_offset + 3, acc_offset : acc_offset + 3] = np.diag(
-            np.square(op.asig) * np.ones((3,))
-        )
+    W = np.hstack(arrs)
 
     # Required for Covariance calculation.
-    Q = W[: N * (K + 1), : N * (K + 1)]
-    R = W[N * (K + 1) : (N + M) * (K + 1), N * (K + 1) : (N + M) * (K + 1)]
+    Q = W[: N * (K + 1)] if include_cov else None
+    R = W[N * (K + 1) : (N + M) * (K + 1)] if include_cov else None
     return W, Q, R
 
 
@@ -434,3 +396,10 @@ if __name__ == "__main__":
     print(f"C mat diff: {np.linalg.norm(C - sC.toarray())}")
     print(f"A mat diff: {np.linalg.norm(A - sA.toarray())}")
     print(f"H mat diff: {np.linalg.norm(H - sH.toarray())}")
+
+    W, Q, R = construct_noise_matrix(Opt(), include_cov=True)
+    sW, sQ, sR = construct_sparse_noise_matrix(Opt(), include_cov=True)
+
+    print(f"R mat diff: {np.linalg.norm(R - np.diag(sR))}")
+    print(f"Q mat diff: {np.linalg.norm(Q - np.diag(sQ))}")
+    print(f"W mat diff: {np.linalg.norm(W - np.diag(sW))}")
