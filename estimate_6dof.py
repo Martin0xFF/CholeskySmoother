@@ -33,7 +33,7 @@ def plot(lst_arr, lst_other=[], zlim=[]):
 class CholeskySmootherOptions:
     N: int = 15
     M: int = 6
-    K: int = 99
+    K: int = 100
 
     dt: float = 0.1
 
@@ -160,8 +160,8 @@ def ConfigureAndRun(state, observations, include_cov=False, sparse=False):
         CholeskySmootherOptions(
             N=15,
             M=6,
-            K=39,
-            dt=0.1,
+            K=299,
+            dt=1.0 / 30,
             # Orientation
             # Initial
             iosig=1.0,
@@ -199,7 +199,7 @@ def SearchForOptimal(t, v, dv, observations, sparse):
         pos_term = -1e6 * np.sum(
             np.square(np.linalg.norm(res[:, 3:6] - v[:, 3:], axis=1))
         )
-        vel_term = -1e3 * np.sum(
+        vel_term = -1e1 * np.sum(
             np.square(np.linalg.norm(res[:, 9:12] - dv[:, :], axis=1))
         )
         return pos_term + vel_term
@@ -208,7 +208,7 @@ def SearchForOptimal(t, v, dv, observations, sparse):
         likelihood_fn,
         [observations],
         np.array([0.001, 0.005, 0.008, 0.08, 1.0, 1.0, 1.0]),
-        500,
+        1000,
         200,
         14,
     )
@@ -221,11 +221,11 @@ def SearchForOptimal(t, v, dv, observations, sparse):
 
 
 def ex(sparse=False):
-    K = 40
+    K = 300
     t = np.linspace(0, 10, K)
     v = md.generate_trajectory(t)
     dv = md.generate_velocity(t)
-    observations = v + md.get_random(0.01, 0.04, seed=42, dim=K)
+    observations = v + md.get_random(0.01, 0.03, seed=42, dim=K)
     ConfigureAndRun(
         [
             1,
@@ -244,11 +244,11 @@ def ex(sparse=False):
 if __name__ == "__main__":
     import argparse as ap
 
-    K = 40
+    K = 300
     t = np.linspace(0, 10, K)
     v = md.generate_trajectory(t)
     dv = md.generate_velocity(t)
-    observations = v + md.get_random(0.01, 0.08, seed=42, dim=K)
+    observations = v + md.get_random(0.01, 0.04, seed=42, dim=K)
 
     parser = ap.ArgumentParser()
     parser.add_argument(
