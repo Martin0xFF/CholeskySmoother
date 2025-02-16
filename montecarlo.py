@@ -28,6 +28,7 @@ def MCMC(
     burn_in=100,
     nwalkers=32,
     start_var=0.00001,
+    check_point_file="state.h5",
 ):
     """Attempts to perform a probabilistic optimization of the variance
     parameters associated with the Cholesky Smoother.
@@ -35,11 +36,17 @@ def MCMC(
     data - corresponds to the args passed to the likelihood_fn, typically the
     observations
     """
+
     rng = np.random.default_rng(42)
     ndim = initial_values.shape[0]
 
     # Configure sampler.
     p0 = initial_values + rng.normal(0, start_var, size=(nwalkers, ndim))
+
+    # Create checkpoint file and backend
+    backend = emcee.backends.HDFBackend(check_point_file)
+    backend.reset(nwalkers, ndim)
+
     sampler = emcee.EnsembleSampler(
         nwalkers,
         ndim,
@@ -49,6 +56,7 @@ def MCMC(
             (emcee.moves.DEMove(), 0.8),
             (emcee.moves.DESnookerMove(), 0.2),
         ],
+        backend=backend,
     )
 
     # Burn in 100 steps, this number is from the example, likely should tune
@@ -57,17 +65,8 @@ def MCMC(
     sampler.reset()
 
     # Perform optimization.
-    for k in range(steps // 100):
-        state = sampler.run_mcmc(state, 100, progress=True)
-        # Samples represent distributions learned from data for target parameters.
-        samples = sampler.get_chain(flat=True)
-        vals = []
-        for i in range(ndim):
-            std = np.std(samples[:, i])
-            val = np.mean(samples[:, i])
-            vals.append(val)
-            print(f"Mean along index {i}: {val}, {std}")
-        print(f"Loglikeihood: {likelihood_fn(np.array(vals),*data)}")
+    state = sampler.run_mcmc(state, steps, progress=True)
+    samples = sampler.get_chain(flat=True)
 
     fig, axs = plt.subplots(ndim, 1)
     for i in range(ndim):

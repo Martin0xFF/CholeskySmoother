@@ -161,27 +161,27 @@ def ConfigureAndRun(state, observations, include_cov=False, sparse=False):
             N=15,
             M=6,
             K=299,
-            dt=1.0 / 30,
+            dt=1.0 / 60,
             # Orientation
             # Initial
-            iosig=1.0,
-            iovsig=1.0,
+            iosig=state[0],
+            iovsig=state[1],
             # Model
-            osig=1.0,
-            ovsig=1.0,
+            osig=state[2],
+            ovsig=state[3],
             # Observation
-            mosig=1.0,
+            mosig=state[4],
             # Position
             # initial
-            ipsig=state[4],
-            ivsig=state[5],
-            iasig=state[6],
+            ipsig=state[5],
+            ivsig=state[6],
+            iasig=state[7],
             # Models
-            psig=state[0],
-            vsig=state[1],
-            asig=state[2],
+            psig=state[8],
+            vsig=state[9],
+            asig=state[10],
             # Observation
-            mpsig=state[3],
+            mpsig=state[11],
         ),
         t,
         include_cov,
@@ -195,29 +195,36 @@ def SearchForOptimal(t, v, dv, observations, sparse):
             return -np.inf
         # Compute Position Norm as likelihood.
         # TODO: Determine why scaling these terms by some large factor helps.
-        res, _cov = ConfigureAndRun(x, observations, sparse=sparse)
+        res, cov = ConfigureAndRun(x, observations, sparse=sparse)
+
         pos_term = -1e6 * np.sum(
-            np.square(np.linalg.norm(res[:, 3:6] - v[:, 3:], axis=1))
+            np.square(np.linalg.norm(res[:, :6] - v[:, :], axis=1))
         )
-        vel_term = -1e1 * np.sum(
+        vel_term = -1e6 * np.sum(
             np.square(np.linalg.norm(res[:, 9:12] - dv[:, :], axis=1))
         )
-        return pos_term + vel_term
+        return vel_term + pos_term - 1e3 * np.sum(x)
 
+    rng = np.random.default_rng(42)
+    initial = rng.normal(1.0, 0.1, size=(12,))
     samples = MCMC(
         likelihood_fn,
         [observations],
-        np.array([0.001, 0.005, 0.008, 0.08, 1.0, 1.0, 1.0]),
-        1000,
+        initial,
+        2000,
         200,
-        14,
+        25,
     )
 
-    means = np.mean(samples, axis=0)
+    final = []
     for i in range(samples.shape[1]):
-        print(f"Final Outlier Less Mean along index {i}: {means[i]}")
+        counts, bins = np.histogram(samples[:, i])
+        f = bins[np.argmax(counts)]
+        print(f"Max of index {i}: {f}")
+        final.append(f)
+
     # Include covariance for run with optimal values.
-    return ConfigureAndRun(means, observations, include_cov=True, sparse=sparse)
+    return ConfigureAndRun(final, observations, include_cov=True, sparse=sparse)
 
 
 def ex(sparse=False):
@@ -228,13 +235,17 @@ def ex(sparse=False):
     observations = v + md.get_random(0.01, 0.03, seed=42, dim=K)
     ConfigureAndRun(
         [
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
+            np.float64(0.024549209645448048),
+            np.float64(0.0005622706917381764),
+            np.float64(0.0006666882320720009),
+            np.float64(0.6044080057277156),
+            np.float64(0.019967630914808306),
+            np.float64(0.00015748445487849452),
+            np.float64(0.0050368767543139195),
+            np.float64(0.00044608420131296393),
+            np.float64(7.725983485158087e-05),
+            np.float64(0.00010185366859256529),
+            np.float64(0.0004999527388707964),
         ],
         observations,
         sparse=sparse,
@@ -283,7 +294,20 @@ if __name__ == "__main__":
         SearchForOptimal(t, v, dv, observations, args.sparse)
         if args.search
         else ConfigureAndRun(
-            [0.001, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04],
+            [
+                0.07458159698662001,
+                0.0005143258418263285,
+                0.005024140922335394,
+                1.0573917931098875,
+                0.10116225156440911,
+                0.31599878575409335,
+                7.667692675992225e-07,
+                3.204844483356648e-07,
+                1.1803549292204023e-08,
+                5.096213021235293e-08,
+                0.3650974853660843,
+                0.11313869801105113,
+            ],
             observations,
             include_cov=True,
         )
